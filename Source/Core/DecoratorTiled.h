@@ -65,6 +65,10 @@ public:
 		void GenerateGeometry(Mesh& mesh, const ComputedValues& computed_values, Vector2f surface_origin, Vector2f surface_dimensions,
 			Vector2f tile_dimensions) const;
 
+		// Repeat atlas regions with individual clipped quads instead of wrapping the full texture.
+		void GenerateRepeatedGeometry(Mesh& mesh, const ComputedValues& computed, Vector2f surface_origin,
+			Vector2f surface_dimensions, Vector2f tile_dimensions) const;
+
 		struct TileData {
 			Vector2f size;         // 'px' units
 			Vector2f texcoords[2]; // relative units

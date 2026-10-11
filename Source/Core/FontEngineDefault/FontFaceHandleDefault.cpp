@@ -62,7 +62,7 @@ int FontFaceHandleDefault::GetStringWidth(StringView string, const TextShapingCo
 
 	bool has_set_size = false;
 	bool is_kerning_enabled = IsKerningEnabled(text_shaping_context);
-	int width = 0;
+	float width = 0.f;
 	for (auto it_string = StringIteratorU8(string); it_string; ++it_string)
 	{
 		Character character = *it_string;
@@ -77,12 +77,12 @@ int FontFaceHandleDefault::GetStringWidth(StringView string, const TextShapingCo
 
 		// Adjust the cursor for this character's advance.
 		width += glyph->advance;
-		width += (int)text_shaping_context.letter_spacing;
+		width += text_shaping_context.letter_spacing;
 
 		prior_character = character;
 	}
 
-	return Math::Max(width, 0);
+	return Math::Max(Math::RoundToInteger(width), 0);
 }
 
 int FontFaceHandleDefault::GenerateLayerConfiguration(const FontEffectList& font_effects)
@@ -168,6 +168,17 @@ bool FontFaceHandleDefault::GenerateLayerTexture(Vector<byte>& texture_data, Vec
 	return it->layer->GenerateTexture(texture_data, texture_dimensions, texture_id, glyphs);
 }
 
+static void PrepareLayerMeshes(RenderManager& render_manager, TexturedMeshList& mesh_list,
+	FontFaceLayer& layer, int geometry_index, size_t string_size)
+{
+	const int num_textures = layer.GetNumTextures();
+	RMLUI_ASSERT(geometry_index + num_textures <= (int)mesh_list.size());
+	for (int tex_index = 0; tex_index < num_textures; ++tex_index)
+		mesh_list[geometry_index + tex_index].texture = layer.GetTexture(render_manager, tex_index);
+	mesh_list[geometry_index].mesh.indices.reserve(string_size * 6);
+	mesh_list[geometry_index].mesh.vertices.reserve(string_size * 4);
+}
+
 int FontFaceHandleDefault::GenerateString(RenderManager& render_manager, TexturedMeshList& mesh_list, StringView string, const Vector2f position,
 	const ColourbPremultiplied colour, const float opacity, const TextShapingContext& text_shaping_context, const int layer_configuration_index)
 {
@@ -175,7 +186,7 @@ int FontFaceHandleDefault::GenerateString(RenderManager& render_manager, Texture
 	RMLUI_ASSERT(layer_configuration_index < (int)layer_configurations.size());
 
 	int geometry_index = 0;
-	int line_width = 0;
+	float line_width = 0.f;
 	bool has_set_size = false;
 	bool is_kerning_enabled = IsKerningEnabled(text_shaping_context);
 
@@ -204,17 +215,10 @@ int FontFaceHandleDefault::GenerateString(RenderManager& render_manager, Texture
 		if (num_textures == 0)
 			continue;
 
-		RMLUI_ASSERT(geometry_index + num_textures <= (int)mesh_list.size());
-
 		line_width = 0;
 		Character prior_character = Character::Null;
 
-		// Set the mesh and textures to the geometries.
-		for (int tex_index = 0; tex_index < num_textures; ++tex_index)
-			mesh_list[geometry_index + tex_index].texture = layer->GetTexture(render_manager, tex_index);
-
-		mesh_list[geometry_index].mesh.indices.reserve(string.size() * 6);
-		mesh_list[geometry_index].mesh.vertices.reserve(string.size() * 4);
+		PrepareLayerMeshes(render_manager, mesh_list, *layer, geometry_index, string.size());
 
 		for (auto it_string = StringIteratorU8(string); it_string; ++it_string)
 		{
@@ -236,14 +240,14 @@ int FontFaceHandleDefault::GenerateString(RenderManager& render_manager, Texture
 			layer->GenerateGeometry(&mesh_list[geometry_index], character, Vector2f(position.x + line_width, position.y), glyph_color);
 
 			line_width += glyph->advance;
-			line_width += (int)text_shaping_context.letter_spacing;
+			line_width += text_shaping_context.letter_spacing;
 			prior_character = character;
 		}
 
 		geometry_index += num_textures;
 	}
 
-	return Math::Max(line_width, 0);
+	return Math::Max(Math::RoundToInteger(line_width), 0);
 }
 
 bool FontFaceHandleDefault::UpdateLayersOnDirty()

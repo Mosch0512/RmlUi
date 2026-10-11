@@ -7,6 +7,7 @@
 #include "../../Include/RmlUi/Core/PropertyDefinition.h"
 #include "../../Include/RmlUi/Core/Spritesheet.h"
 #include <algorithm>
+#include <cmath>
 
 namespace Rml {
 
@@ -71,6 +72,61 @@ Vector2f DecoratorTiled::Tile::GetNaturalDimensions(Element* element) const
 	return raw_dimensions * scale_raw_to_natural_dimensions;
 }
 
+static float TileAlignmentOffset(const Style::LengthPercentage alignment, float available_space)
+{
+	switch (alignment.type)
+	{
+	case Style::LengthPercentage::Length: return alignment.value;
+	case Style::LengthPercentage::Percentage: return available_space * alignment.value * 0.01f;
+#ifdef RMLUI_MATH_EXPRESSIONS
+	case Style::LengthPercentage::Calculation:
+		RMLUI_ASSERTMSG(false, "Decorator tile alignment rejects calculated values during property parsing.");
+		break;
+#endif
+	}
+	return 0.f;
+}
+
+void DecoratorTiled::Tile::GenerateRepeatedGeometry(Mesh& mesh, const ComputedValues& computed,
+	const Vector2f surface_origin, const Vector2f surface_dimensions, const Vector2f tile_dimensions) const
+{
+	if (tile_dimensions.x <= 0.f || tile_dimensions.y <= 0.f)
+		return;
+	const bool repeat_x = fit_mode != REPEAT_Y;
+	const bool repeat_y = fit_mode != REPEAT_X;
+	Vector2f offset(0.f);
+	for (int axis = 0; axis < 2; ++axis)
+	{
+		if ((axis == 0 && repeat_x) || (axis == 1 && repeat_y))
+			continue;
+		offset[axis] = TileAlignmentOffset(align[axis], surface_dimensions[axis] - tile_dimensions[axis]);
+	}
+	offset = offset.Round();
+	const Vector2f uv_start = tile_data.texcoords[0] + oriented_texcoords[orientation][0] *
+		(tile_data.texcoords[1] - tile_data.texcoords[0]);
+	const Vector2f uv_end = tile_data.texcoords[0] + oriented_texcoords[orientation][1] *
+		(tile_data.texcoords[1] - tile_data.texcoords[0]);
+	const ColourbPremultiplied colour = computed.image_color().ToPremultiplied(computed.opacity());
+	const int columns = repeat_x ? int(std::ceil(surface_dimensions.x / tile_dimensions.x)) : 1;
+	const int rows = repeat_y ? int(std::ceil(surface_dimensions.y / tile_dimensions.y)) : 1;
+	mesh.vertices.reserve(mesh.vertices.size() + size_t(columns) * size_t(rows) * 4);
+	mesh.indices.reserve(mesh.indices.size() + size_t(columns) * size_t(rows) * 6);
+	for (int row = 0; row < rows; ++row)
+	for (int column = 0; column < columns; ++column)
+	{
+		const Vector2f origin = offset + Vector2f(column * tile_dimensions.x, row * tile_dimensions.y);
+		const Vector2f clipped_start(std::max(origin.x, 0.f), std::max(origin.y, 0.f));
+		const Vector2f clipped_end(std::min(origin.x + tile_dimensions.x, surface_dimensions.x),
+			std::min(origin.y + tile_dimensions.y, surface_dimensions.y));
+		const Vector2f dimensions = clipped_end - clipped_start;
+		if (dimensions.x <= 0.f || dimensions.y <= 0.f)
+			continue;
+		const Vector2f start_uv = uv_start + (uv_end - uv_start) * ((clipped_start - origin) / tile_dimensions);
+		const Vector2f end_uv = uv_start + (uv_end - uv_start) * ((clipped_end - origin) / tile_dimensions);
+		MeshUtilities::GenerateQuad(mesh, surface_origin + clipped_start, dimensions, colour, start_uv, end_uv);
+	}
+}
+
 void DecoratorTiled::Tile::GenerateGeometry(Mesh& mesh, const ComputedValues& computed, const Vector2f surface_origin,
 	const Vector2f surface_dimensions, const Vector2f tile_dimensions) const
 {
@@ -81,6 +137,12 @@ void DecoratorTiled::Tile::GenerateGeometry(Mesh& mesh, const ComputedValues& co
 
 	if (!tile_data_calculated)
 		return;
+
+	if ((fit_mode == REPEAT || fit_mode == REPEAT_X || fit_mode == REPEAT_Y) && size != Vector2f(0.f))
+	{
+		GenerateRepeatedGeometry(mesh, computed, surface_origin, surface_dimensions, tile_dimensions);
+		return;
+	}
 
 	// Generate the oriented texture coordinates for the tiles.
 	Vector2f scaled_texcoords[2];
@@ -160,18 +222,7 @@ void DecoratorTiled::Tile::GenerateGeometry(Mesh& mesh, const ComputedValues& co
 		// Offset tile along each dimension.
 		for (int i = 0; i < 2; i++)
 		{
-			switch (align[i].type)
-			{
-			case Style::LengthPercentage::Length: tile_offset[i] = align[i].value; break;
-			case Style::LengthPercentage::Percentage:
-				tile_offset[i] = (surface_dimensions[i] - final_tile_dimensions[i]) * align[i].value * 0.01f;
-				break;
-#ifdef RMLUI_MATH_EXPRESSIONS
-			case Style::LengthPercentage::Calculation:
-				RMLUI_ASSERTMSG(false, "Decorator tile alignment rejects calculated values during property parsing.");
-				break;
-#endif
-			}
+			tile_offset[i] = TileAlignmentOffset(align[i], surface_dimensions[i] - final_tile_dimensions[i]);
 		}
 		tile_offset = tile_offset.Round();
 
@@ -337,14 +388,6 @@ bool DecoratorTiledInstancer::GetTileProperties(DecoratorTiled::Tile* tiles, Tex
 			RMLUI_ASSERT(ids.align_x != PropertyId::Invalid && ids.align_y != PropertyId::Invalid);
 			const Property& fit_property = *properties.GetProperty(ids.fit);
 			tile.fit_mode = (DecoratorTiled::TileFitMode)fit_property.value.Get<int>();
-
-			if (sprite &&
-				(tile.fit_mode == DecoratorTiled::TileFitMode::REPEAT || tile.fit_mode == DecoratorTiled::TileFitMode::REPEAT_X ||
-					tile.fit_mode == DecoratorTiled::TileFitMode::REPEAT_Y))
-			{
-				Log::Message(Log::LT_WARNING, "Decorator 'fit' value is '%s', which is incompatible with sprites", fit_property.ToString().c_str());
-				return false;
-			}
 
 			const Property* align_properties[2] = {properties.GetProperty(ids.align_x), properties.GetProperty(ids.align_y)};
 
