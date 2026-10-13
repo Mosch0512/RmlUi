@@ -867,7 +867,7 @@ void RenderInterface_SDL_GPU::ReleasePipelines()
 	stencil_pipelines_failed = false;
 }
 
-RenderInterface_SDL_GPU::RenderInterface_SDL_GPU(SDL_GPUDevice* device, SDL_Window* window) : device(device), window(window)
+RenderInterface_SDL_GPU::RenderInterface_SDL_GPU(SDL_GPUDevice* device, SDL_Window* /*window*/) : device(device)
 {
 	render_layers.Initialize(device);
 

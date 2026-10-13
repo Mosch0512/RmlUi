@@ -489,7 +489,6 @@ private:
 	void ClearScissorOverride();
 
 	SDL_GPUDevice* device = nullptr;
-	SDL_Window* window = nullptr;
 
 	SDL_GPUShader* shaders[num_shaders] = {};
 	bool shader_failed[num_shaders] = {};
