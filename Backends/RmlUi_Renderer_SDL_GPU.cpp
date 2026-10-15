@@ -409,15 +409,20 @@ static SDL_GPUSampleCount SelectSampleCount(SDL_GPUDevice* device, SDL_GPUTextur
 	return SDL_GPU_SAMPLECOUNT_1;
 }
 
-void RenderInterface_SDL_GPU::RenderLayerStack::Initialize(SDL_GPUDevice* in_device)
+void RenderInterface_SDL_GPU::RenderLayerStack::Initialize(SDL_GPUDevice* in_device, SDL_GPUTextureFormat swapchain_format)
 {
 	device = in_device;
+	if (swapchain_format != SDL_GPU_TEXTUREFORMAT_INVALID &&
+		SDL_GPUTextureSupportsFormat(device, swapchain_format, SDL_GPU_TEXTURETYPE_2D,
+			SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER))
+		format = swapchain_format;
+
 	supported_depth_stencil_format = SelectDepthStencilFormat(device);
 	depth_stencil_format = supported_depth_stencil_format;
 	if (depth_stencil_format == SDL_GPU_TEXTUREFORMAT_INVALID)
 		Log::Message(Log::LT_WARNING, "No supported depth/stencil format found, clip masks will be unavailable");
 
-	sample_count = SelectSampleCount(device, layer_format, depth_stencil_format);
+	sample_count = SelectSampleCount(device, format, depth_stencil_format);
 }
 
 bool RenderInterface_SDL_GPU::RenderLayerStack::CreateTarget(RenderTarget& target, const char* debug_name, bool is_layer)
@@ -434,7 +439,7 @@ bool RenderInterface_SDL_GPU::RenderLayerStack::CreateTarget(RenderTarget& targe
 	// A multisampled texture holds samples rather than pixels: it cannot be sampled, copied or blitted, only resolved.
 	if (target_sample_count == SDL_GPU_SAMPLECOUNT_1)
 		info.usage |= SDL_GPU_TEXTUREUSAGE_SAMPLER;
-	info.format = layer_format;
+	info.format = format;
 	info.width = static_cast<Uint32>(width);
 	info.height = static_cast<Uint32>(height);
 	info.layer_count_or_depth = 1;
@@ -458,8 +463,9 @@ bool RenderInterface_SDL_GPU::RenderLayerStack::CreateTarget(RenderTarget& targe
 
 void RenderInterface_SDL_GPU::RenderLayerStack::DestroyTargets()
 {
-	for (RenderTarget& target : layers)
-		SDL_ReleaseGPUTexture(device, target.color);
+	for (size_t i = (base_external ? 1 : 0); i < layers.size(); i++)
+		SDL_ReleaseGPUTexture(device, layers[i].color);
+	base_external = false;
 	for (RenderTarget& target : postprocess)
 	{
 		SDL_ReleaseGPUTexture(device, target.color);
@@ -482,7 +488,7 @@ void RenderInterface_SDL_GPU::RenderLayerStack::ReleaseAll()
 	height = 0;
 }
 
-void RenderInterface_SDL_GPU::RenderLayerStack::BeginFrame(int in_width, int in_height)
+void RenderInterface_SDL_GPU::RenderLayerStack::BeginFrame(int in_width, int in_height, SDL_GPUTexture* external_base)
 {
 	RMLUI_ASSERT(layers_size == 0);
 
@@ -493,6 +499,28 @@ void RenderInterface_SDL_GPU::RenderLayerStack::BeginFrame(int in_width, int in_
 		height = in_height;
 
 		depth_stencil_format = supported_depth_stencil_format;
+	}
+
+	if (external_base)
+	{
+		if (layers.empty())
+			layers.emplace_back();
+		else if (!base_external)
+			SDL_ReleaseGPUTexture(device, layers[0].color);
+
+		RenderTarget& base = layers[0];
+		base.color = external_base;
+		base.width = width;
+		base.height = height;
+		base.sample_count = SDL_GPU_SAMPLECOUNT_1;
+		base.use_depth_stencil = true;
+		base_external = true;
+	}
+	else if (base_external)
+	{
+		// PushLayer() below creates one of the stack's own in its place.
+		layers[0] = {};
+		base_external = false;
 	}
 
 	PushLayer();
@@ -753,7 +781,7 @@ SDL_GPUGraphicsPipeline* RenderInterface_SDL_GPU::GetPipeline(ProgramId program,
 	}
 
 	SDL_GPUColorTargetDescription target{};
-	target.format = layer_format;
+	target.format = render_layers.GetFormat();
 	target.blend_state = GetBlendState(blend, writes_stencil);
 
 	SDL_GPUVertexAttribute attrib[3]{};
@@ -867,9 +895,9 @@ void RenderInterface_SDL_GPU::ReleasePipelines()
 	stencil_pipelines_failed = false;
 }
 
-RenderInterface_SDL_GPU::RenderInterface_SDL_GPU(SDL_GPUDevice* device, SDL_Window* /*window*/) : device(device)
+RenderInterface_SDL_GPU::RenderInterface_SDL_GPU(SDL_GPUDevice* device, SDL_Window* window) : device(device)
 {
-	render_layers.Initialize(device);
+	render_layers.Initialize(device, window ? SDL_GetGPUSwapchainTextureFormat(device, window) : SDL_GPU_TEXTUREFORMAT_INVALID);
 
 	vertex_arena.Initialize(device, SDL_GPU_BUFFERUSAGE_VERTEX, sizeof(Vertex), "RmlUi vertices");
 	index_arena.Initialize(device, SDL_GPU_BUFFERUSAGE_INDEX, sizeof(int), "RmlUi indices");
@@ -942,7 +970,7 @@ void RenderInterface_SDL_GPU::Shutdown()
 // -- Frame and pass management -----------------------------------------------
 
 void RenderInterface_SDL_GPU::BeginFrame(SDL_GPUCommandBuffer* in_command_buffer, SDL_GPUTexture* in_swapchain_texture, uint32_t width,
-	uint32_t height)
+	uint32_t height, bool draw_into_target)
 {
 	command_buffer = in_command_buffer;
 	swapchain_texture = in_swapchain_texture;
@@ -952,6 +980,8 @@ void RenderInterface_SDL_GPU::BeginFrame(SDL_GPUCommandBuffer* in_command_buffer
 	frame_active = true;
 	frame_resolved_into_postprocess = false;
 	frame_base_layer_seeded = false;
+	// A multisampled layer cannot be the single-sampled target; the caller vouches for its format and usage.
+	frame_drawn_into_target = draw_into_target && in_swapchain_texture && !render_layers.IsMultisampled();
 
 	vertex_arena.BeginFrame(frame_index);
 	index_arena.BeginFrame(frame_index);
@@ -979,7 +1009,7 @@ void RenderInterface_SDL_GPU::BeginFrame(SDL_GPUCommandBuffer* in_command_buffer
 	SDL_PushGPUDebugGroup(command_buffer, "RmlUi frame");
 #endif
 
-	render_layers.BeginFrame(static_cast<int>(width), static_cast<int>(height));
+	render_layers.BeginFrame(static_cast<int>(width), static_cast<int>(height), frame_drawn_into_target ? in_swapchain_texture : nullptr);
 
 	// A pipeline records whether its pass carries a depth/stencil attachment, so the cache is only valid while that
 	// answer holds. It can change on the frame the targets are (re)created.
@@ -993,6 +1023,10 @@ void RenderInterface_SDL_GPU::BeginFrame(SDL_GPUCommandBuffer* in_command_buffer
 		WarmPipelineCache();
 
 	EnsureQuads(static_cast<int>(width), static_cast<int>(height));
+
+	// The target already holds the scene and is drawn onto as it is; the first draw opens the pass on it.
+	if (frame_drawn_into_target)
+		return;
 
 	frame_base_layer_seeded = SeedBaseLayerFromSwapchain();
 	if (!frame_base_layer_seeded)
@@ -1051,33 +1085,11 @@ void RenderInterface_SDL_GPU::EndFrame()
 
 	EndRenderPass();
 
-	// Composited onto the swapchain with real alpha blending rather than a hardware MSAA resolve or a straight
-	// SDL_BlitGPUTexture, so the game's own 3D scene (drawn into this same swapchain texture earlier in the frame,
-	// see RmlUiRuntime::Render()) shows through instead of being overwritten -- upstream's resolve/blit fast path is
-	// fine for its own sample shell, which always clears the swapchain itself and is the only thing drawing into it
-	// that frame, so an unconditional overwrite there is indistinguishable from a blend.
-	//
-	// The blend cannot be done with a pipeline draw straight into swapchain_texture, though -- every pipeline this
-	// class builds targets the fixed `layer_format` (R8G8B8A8_UNORM, see this class's own declaration), but the
-	// swapchain's real format is whatever SDL_GetGPUSwapchainTextureFormat() reports (commonly B8G8R8A8_UNORM on
-	// Windows/Vulkan) and is under no obligation to match. A pipeline created for one color-target format used in a
-	// render pass with a different actual attachment format is invalid, and confirmed the hard way to crash rather
-	// than error cleanly: an access violation inside amdvlk64.dll (AMD's Vulkan ICD), at an identical fault offset
-	// across repeated runs, the very first time this code drew straight into the swapchain. The ORIGINAL resolve/
-	// blit code already knew this -- its own `resolve_to_swapchain` fast path only resolved directly into the
-	// swapchain when `swapchain_format == layer_format`, falling back to SDL_BlitGPUTexture (a real hardware blit,
-	// which converts format for free, unlike a pipeline draw) otherwise. Removing that branch for the blend broke
-	// the same guarantee it existed for.
-	//
-	// Fixed by keeping the blend entirely inside layer_format-compatible textures and using two real hardware blits
-	// (format-converting, safe regardless of swapchain format) only at the two boundary crossings: capture the
-	// swapchain's current content into a spare postprocess target, blend RmlUi's own resolved layer onto that copy
-	// (both operands now layer_format, the same safe pipeline path CompositeLayers() already uses internally to
-	// stack RmlUi's own layers), then blit the composited result back onto the real swapchain. Reuses
-	// RenderLayerStack's own already-managed, already-correctly-sized scratch target (GetPostprocessSecondary())
-	// rather than this class owning a second one itself.
+	// Unless the target was the base layer itself, the frame is blended over what the target already held (the scene
+	// beneath the UI). The blend stays inside layer-format textures and only blits, which convert formats, touch the
+	// target: a pipeline draw into a target of another format than it was built for is invalid and crashes drivers.
 	const RenderTarget* base_layer = render_layers.GetBaseLayer();
-	const bool have_frame = (command_buffer && swapchain_texture && base_layer && base_layer->color);
+	const bool have_frame = (command_buffer && swapchain_texture && base_layer && base_layer->color && !frame_drawn_into_target);
 
 	// A multisampled layer's texture holds samples, not pixels, and can't be sampled by the composite draw below
 	// directly -- resolve it into the postprocess target first, same as every other reader of a layer already does
@@ -2711,7 +2723,7 @@ TextureHandle RenderInterface_SDL_GPU::SaveLayerAsTexture()
 	if (partial)
 		usage |= SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
 
-	SDL_GPUTexture* texture = CreateTexture(region.Width(), region.Height(), layer_format, usage, "RmlUi layer texture");
+	SDL_GPUTexture* texture = CreateTexture(region.Width(), region.Height(), render_layers.GetFormat(), usage, "RmlUi layer texture");
 	if (!texture)
 		return 0;
 
@@ -2911,15 +2923,21 @@ bool RenderInterface_SDL_GPU::CaptureScreen(int& out_width, int& out_height, int
 	out_num_components = 3;
 	out_data = UniquePtr<byte[]>(new byte[static_cast<size_t>(width) * static_cast<size_t>(height) * 3]);
 
+	// Layers take the swapchain's format, which stores blue first on most desktop drivers.
+	const SDL_GPUTextureFormat format = render_layers.GetFormat();
+	const bool bgra = (format == SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM || format == SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM_SRGB);
+	const int red = bgra ? 2 : 0;
+	const int blue = bgra ? 0 : 2;
+
 	for (int y = 0; y < height; y++)
 	{
 		const byte* source_row = mapped + static_cast<size_t>(height - 1 - y) * static_cast<size_t>(width) * 4;
 		byte* destination_row = out_data.get() + static_cast<size_t>(y) * static_cast<size_t>(width) * 3;
 		for (int x = 0; x < width; x++)
 		{
-			destination_row[x * 3 + 0] = source_row[x * 4 + 0];
+			destination_row[x * 3 + 0] = source_row[x * 4 + red];
 			destination_row[x * 3 + 1] = source_row[x * 4 + 1];
-			destination_row[x * 3 + 2] = source_row[x * 4 + 2];
+			destination_row[x * 3 + 2] = source_row[x * 4 + blue];
 		}
 	}
 

@@ -17,7 +17,11 @@ public:
 
 	void Shutdown();
 
-	void BeginFrame(SDL_GPUCommandBuffer* command_buffer, SDL_GPUTexture* swapchain_texture, uint32_t width, uint32_t height);
+	// With `draw_into_target`, the target itself is the frame's base layer: RmlUi draws straight onto what it holds, with
+	// no copy in or out. The target must then have the window's swapchain format and both COLOR_TARGET and SAMPLER
+	// usage; where it cannot be used that way (multisampled layers, another format), the frame is composited as usual.
+	void BeginFrame(SDL_GPUCommandBuffer* command_buffer, SDL_GPUTexture* swapchain_texture, uint32_t width, uint32_t height,
+		bool draw_into_target = false);
 	void EndFrame();
 
 	// Rows come back bottom-up. Must be called after EndFrame() and before the next BeginFrame().
@@ -65,7 +69,6 @@ private:
 	static constexpr int frames_before_reuse = 3;
 	static constexpr int geometry_retention_frames = 120;
 	static constexpr uint32_t max_pending_upload_bytes = 8 * 1024 * 1024;
-	static constexpr SDL_GPUTextureFormat layer_format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
 	static constexpr SDL_GPUTextureFormat content_format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
 	// Filters read and write the first two in turn, a blurred drop shadow needs a third while its own blur runs, and
 	// the fourth holds the image saved by SaveLayerAsMaskImage().
@@ -285,10 +288,12 @@ private:
 	*/
 	class RenderLayerStack {
 	public:
-		void Initialize(SDL_GPUDevice* device);
+		// Layers take the swapchain's format where it can be sampled, so a swapchain-format target can be layer zero.
+		void Initialize(SDL_GPUDevice* device, SDL_GPUTextureFormat swapchain_format);
 		void ReleaseAll();
 
-		void BeginFrame(int width, int height);
+		// `external_base`, when given, is layer zero for the frame instead of a texture of the stack's own.
+		void BeginFrame(int width, int height, SDL_GPUTexture* external_base = nullptr);
 		void EndFrame();
 
 		Rml::LayerHandle PushLayer();
@@ -311,6 +316,7 @@ private:
 		SDL_GPUTextureFormat GetDepthStencilFormat() const { return depth_stencil_format; }
 		SDL_GPUSampleCount GetSampleCount() const { return sample_count; }
 		bool IsMultisampled() const { return sample_count != SDL_GPU_SAMPLECOUNT_1; }
+		SDL_GPUTextureFormat GetFormat() const { return format; }
 
 		int GetWidth() const { return width; }
 		int GetHeight() const { return height; }
@@ -324,9 +330,12 @@ private:
 		int width = 0;
 		int height = 0;
 		SDL_GPUSampleCount sample_count = SDL_GPU_SAMPLECOUNT_1;
+		SDL_GPUTextureFormat format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
 
 		int layers_size = 0;
 		Rml::Vector<RenderTarget> layers;
+		// Layer zero belongs to the caller this frame, see BeginFrame(): never released here.
+		bool base_external = false;
 		// A fixed array rather than a growing vector: callers hold on to several of these references at once, which a
 		// reallocation would invalidate.
 		RenderTarget postprocess[num_postprocess_targets];
@@ -524,6 +533,8 @@ private:
 	bool frame_resolved_into_postprocess = false;
 	// The base layer started the frame as a copy of the swapchain, see SeedBaseLayerFromSwapchain().
 	bool frame_base_layer_seeded = false;
+	// The base layer is the target BeginFrame() was given, so there is nothing to composite back in EndFrame().
+	bool frame_drawn_into_target = false;
 
 	// Everything RmlUi asked for and has not given back. RmlUi releases each of them during Rml::Shutdown(), which
 	// clients call before shutting the backend down, so all four are zero by the time Shutdown() runs. A leak in a
