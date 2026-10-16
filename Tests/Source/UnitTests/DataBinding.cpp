@@ -988,3 +988,56 @@ TEST_CASE("data_binding.data-value")
 	document->Close();
 	TestsShell::ShutdownShell();
 }
+
+TEST_CASE("data_binding.shrink_and_clear")
+{
+	Context* context = TestsShell::GetContext();
+	REQUIRE(context);
+
+	static const String document_rml = R"(
+<rml>
+<head>
+	<title>Test</title>
+	<link type="text/template" href="/assets/window.rml"/>
+</head>
+<body template="window" data-model="shrink">
+<p data-for="item : items" data-class-big="item > 1">{{ item }}</p>
+<div id="styled" data-style-left="left"></div>
+</body>
+</rml>
+)";
+
+	DataModelConstructor constructor = context->CreateDataModel("shrink");
+	REQUIRE(constructor);
+	REQUIRE(constructor.RegisterArray<Vector<int>>());
+
+	Vector<int> items = {1, 2, 3};
+	String left = "10px";
+	constructor.Bind("items", &items);
+	constructor.Bind("left", &left);
+	DataModelHandle handle = constructor.GetModelHandle();
+
+	ElementDocument* document = context->LoadDocumentFromMemory(document_rml);
+	REQUIRE(document);
+	document->Show();
+
+	TestsShell::RenderLoop();
+
+	Element* styled = document->GetElementById("styled");
+	CHECK(styled->GetLocalProperty("left"));
+
+	// Neither the removed item's views nor the empty style may log a warning.
+	items.pop_back();
+	left.clear();
+	handle.DirtyVariable("items");
+	handle.DirtyVariable("left");
+	TestsShell::RenderLoop();
+
+	ElementList big;
+	document->QuerySelectorAll(big, "p.big");
+	CHECK(big.size() == 1);
+	CHECK(!styled->GetLocalProperty("left"));
+
+	document->Close();
+	TestsShell::ShutdownShell();
+}

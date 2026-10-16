@@ -17,6 +17,8 @@ namespace Rml {
 static constexpr int SortOffset_DataValue = 100;
 //  'data-checked' may need a value attribute already set.
 static constexpr int SortOffset_DataChecked = 110;
+//  'data-for' must remove surplus items before their own views run: they share its depth and would read past the shrunk array.
+static constexpr int SortOffset_DataFor = -10;
 
 DataViewCommon::DataViewCommon(Element* element, String override_modifier, int sort_offset) :
 	DataView(element, sort_offset), modifier(std::move(override_modifier))
@@ -165,7 +167,16 @@ bool DataViewStyle::Update(DataModel& model)
 	{
 		const String value = variant.Get<String>();
 		const Property* p = element->GetLocalProperty(property_name);
-		if (!p || p->Get<String>() != value)
+		// An empty value clears the property, as in the DOM; parsing it would fail and keep the stale value.
+		if (value.empty())
+		{
+			if (p)
+			{
+				element->RemoveProperty(property_name);
+				result = true;
+			}
+		}
+		else if (!p || p->Get<String>() != value)
 		{
 			element->SetProperty(property_name, value);
 			result = true;
@@ -424,7 +435,7 @@ String DataViewText::BuildText() const
 	return result;
 }
 
-DataViewFor::DataViewFor(Element* element) : DataView(element, 0) {}
+DataViewFor::DataViewFor(Element* element) : DataView(element, SortOffset_DataFor) {}
 
 bool DataViewFor::Initialize(DataModel& model, Element* element, const String& in_expression, const String& /*modifier*/)
 {
