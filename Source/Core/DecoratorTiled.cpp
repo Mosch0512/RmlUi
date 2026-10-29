@@ -127,6 +127,76 @@ void DecoratorTiled::Tile::GenerateRepeatedGeometry(Mesh& mesh, const ComputedVa
 	}
 }
 
+// The size of one texel in texture coordinates, per axis; zero where the tile does not say.
+static Vector2f TexelSize(const DecoratorTiled::Tile::TileData& data)
+{
+	Vector2f texel(0.f);
+	for (int axis = 0; axis < 2; ++axis)
+		if (data.size[axis] > 0.f)
+			texel[axis] = Math::Absolute(data.texcoords[1][axis] - data.texcoords[0][axis]) / data.size[axis];
+	return texel;
+}
+
+// Which ends of a quad, per axis (0 its start, 1 its end), are a sprite edge inside its sheet: the next sprite's
+// texels lie right past them, and linear filtering at the quad's outer pixels mixes them in. Ends at the texture
+// border are the renderer's to clamp, and ends the tile was clipped at lie inside the sprite.
+static void FindSheetEdges(const Vector2f texcoords[2], const bool clipped[2][2], Vector2f texel, bool out_inner[2][2])
+{
+	constexpr float epsilon = 1e-4f;
+	for (int axis = 0; axis < 2; ++axis)
+	{
+		for (int end = 0; end < 2; ++end)
+		{
+			const float uv = texcoords[end][axis];
+			out_inner[axis][end] = texel[axis] > 0.f && !clipped[axis][end] && uv > epsilon && uv < 1.f - epsilon;
+		}
+	}
+}
+
+// Draws the tile as up to 3 x 3 quads: along each sprite edge inside its sheet a band half a texel wide that samples
+// the edge texel's centre, and everything else mapped as the single quad would be. Linear filtering then stays
+// inside the sprite at any scale, without moving any of its pixels.
+static void GenerateSheetTileQuad(Mesh& mesh, Vector2f position, Vector2f size, ColourbPremultiplied colour, const Vector2f texcoords[2],
+	Vector2f texel, const bool inner[2][2])
+{
+	struct Span {
+		float start, end, uv_start, uv_end;
+	};
+	Span spans[2][3];
+	int counts[2] = {0, 0};
+	for (int axis = 0; axis < 2; ++axis)
+	{
+		const float start = position[axis];
+		const float end = position[axis] + size[axis];
+		const float uv_start = texcoords[0][axis];
+		const float uv_end = texcoords[1][axis];
+		const float texels = (texel[axis] > 0.f) ? Math::Absolute(uv_end - uv_start) / texel[axis] : 0.f;
+		// Half a texel: in px, and in texture coordinates toward the quad's inside.
+		const float band = (texels > 0.f) ? 0.5f * size[axis] / texels : 0.f;
+		const float half_texel = (uv_end < uv_start ? -0.5f : 0.5f) * texel[axis];
+		const bool fits = band > 0.f && 2.f * band < size[axis];
+		const bool lead = inner[axis][0] && fits;
+		const bool trail = inner[axis][1] && fits;
+		int& n = counts[axis];
+		if (lead)
+			spans[axis][n++] = {start, start + band, uv_start + half_texel, uv_start + half_texel};
+		spans[axis][n++] = {lead ? start + band : start, trail ? end - band : end, lead ? uv_start + half_texel : uv_start,
+			trail ? uv_end - half_texel : uv_end};
+		if (trail)
+			spans[axis][n++] = {end - band, end, uv_end - half_texel, uv_end - half_texel};
+	}
+	for (int y = 0; y < counts[1]; ++y)
+	{
+		for (int x = 0; x < counts[0]; ++x)
+		{
+			const Span& sx = spans[0][x];
+			const Span& sy = spans[1][y];
+			MeshUtilities::GenerateQuad(mesh, Vector2f(sx.start, sy.start), Vector2f(sx.end - sx.start, sy.end - sy.start), colour,
+				Vector2f(sx.uv_start, sy.uv_start), Vector2f(sx.uv_end, sy.uv_end));
+		}
+	}
+}
+
 void DecoratorTiled::Tile::GenerateGeometry(Mesh& mesh, const ComputedValues& computed, const Vector2f surface_origin,
 	const Vector2f surface_dimensions, const Vector2f tile_dimensions) const
 {
@@ -216,6 +286,7 @@ void DecoratorTiled::Tile::GenerateGeometry(Mesh& mesh, const ComputedValues& co
 	}
 
 	Vector2f tile_offset(0, 0);
+	bool clipped[2][2] = {{false, false}, {false, false}};
 
 	if (offset_and_clip_tile)
 	{
@@ -233,6 +304,8 @@ void DecoratorTiled::Tile::GenerateGeometry(Mesh& mesh, const ComputedValues& co
 			float overshoot_left = std::max(-tile_offset[i], 0.0f);
 			float overshoot_right = std::max(tile_offset[i] + final_tile_dimensions[i] - surface_dimensions[i], 0.0f);
 
+			clipped[i][0] = overshoot_left > 0.f;
+			clipped[i][1] = overshoot_right > 0.f;
 			if (overshoot_left > 0.f || overshoot_right > 0.f)
 			{
 				float& left = scaled_texcoords[0][i];
@@ -255,7 +328,10 @@ void DecoratorTiled::Tile::GenerateGeometry(Mesh& mesh, const ComputedValues& co
 	Vector2f tile_position = (surface_origin + tile_offset);
 	Math::SnapToPixelGrid(tile_position, final_tile_dimensions);
 
-	MeshUtilities::GenerateQuad(mesh, tile_position, final_tile_dimensions, quad_colour, scaled_texcoords[0], scaled_texcoords[1]);
+	const Vector2f texel = TexelSize(tile_data);
+	bool inner[2][2];
+	FindSheetEdges(scaled_texcoords, clipped, texel, inner);
+	GenerateSheetTileQuad(mesh, tile_position, final_tile_dimensions, quad_colour, scaled_texcoords, texel, inner);
 }
 
 void DecoratorTiled::ScaleTileDimensions(Vector2f& tile_dimensions, float axis_value, Axis axis_enum) const
