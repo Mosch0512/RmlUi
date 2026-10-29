@@ -173,6 +173,8 @@ private:
 		GeometryArena::Allocation vertices;
 		GeometryArena::Allocation indices;
 		int num_indices = 0;
+		// Its texture coordinates leave the 0..1 square, so it tiles its texture and is drawn with the repeating sampler.
+		bool tiles_texture = false;
 	};
 
 	enum class ShaderGradientFunction { Linear, Radial, Conic, RepeatingLinear, RepeatingRadial, RepeatingConic };
@@ -449,8 +451,8 @@ private:
 		uint8_t stencil_reference = 0;
 		SDL_GPUTexture* texture = nullptr;
 		SDL_GPUTexture* mask_texture = nullptr;
-		// Null to sample with the renderer's default sampler, which repeats. The postprocess passes clamp instead:
-		// they offset and scale texture coordinates, and a wrapped sample would come back from the far edge.
+		// Null to sample with the renderer's repeating sampler. RenderGeometry() and the postprocess passes clamp
+		// instead: a repeated sample would bring colours back from the texture's far edge.
 		SDL_GPUSampler* sampler = nullptr;
 		// Null to use the transform RmlUi last set. The renderer's own target-sized quad is in target coordinates and
 		// passes the plain projection instead. Only read by the programs whose vertex stage takes a transform.
@@ -514,8 +516,10 @@ private:
 	// makes writing to it safe while recorded uploads are still in flight.
 	TransferBuffer texture_transfers;
 
-	// The postprocess passes use the clamping one: they sample outside the image on purpose, and a repeated sample
-	// would come back from the opposite edge.
+	// The repeating one is only for geometry that tiles its texture. Everything else clamps: at a quad's outer pixels
+	// linear filtering reaches half a texel past the edge, and a repeated sample comes back from the opposite edge
+	// (a dark line along an image whose own edge is transparent). The postprocess passes sample outside the image
+	// on purpose.
 	SDL_GPUSampler* linear_sampler = nullptr;
 	SDL_GPUSampler* clamp_sampler = nullptr;
 
