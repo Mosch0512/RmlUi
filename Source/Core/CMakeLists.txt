@@ -192,6 +192,8 @@ add_library(rmlui_core
 	Template.h
 	TemplateCache.cpp
 	TemplateCache.h
+	TexCoordClamp.cpp
+	TexCoordClamp.h
 	Texture.cpp
 	TextureDatabase.cpp
 	TextureDatabase.h

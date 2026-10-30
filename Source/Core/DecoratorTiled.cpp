@@ -6,6 +6,7 @@
 #include "../../Include/RmlUi/Core/MeshUtilities.h"
 #include "../../Include/RmlUi/Core/PropertyDefinition.h"
 #include "../../Include/RmlUi/Core/Spritesheet.h"
+#include "TexCoordClamp.h"
 #include <algorithm>
 #include <cmath>
 
@@ -87,114 +88,70 @@ static float TileAlignmentOffset(const Style::LengthPercentage alignment, float 
 	return 0.f;
 }
 
+// The sprite's extent in texture coordinates and one texel's size, per axis; the texel is zero where the tile does not
+// say how large the sprite is.
+static void GetSpriteBounds(const DecoratorTiled::Tile::TileData& data, Vector2f& out_min, Vector2f& out_max, Vector2f& out_texel)
+{
+	out_min = Math::Min(data.texcoords[0], data.texcoords[1]);
+	out_max = Math::Max(data.texcoords[0], data.texcoords[1]);
+	out_texel = Vector2f(0.f);
+	for (int axis = 0; axis < 2; ++axis)
+	{
+		if (data.size[axis] > 0.f)
+			out_texel[axis] = (out_max[axis] - out_min[axis]) / data.size[axis];
+	}
+}
+
 void DecoratorTiled::Tile::GenerateRepeatedGeometry(Mesh& mesh, const ComputedValues& computed,
 	const Vector2f surface_origin, const Vector2f surface_dimensions, const Vector2f tile_dimensions) const
 {
 	if (tile_dimensions.x <= 0.f || tile_dimensions.y <= 0.f)
 		return;
-	const bool repeat_x = fit_mode != REPEAT_Y;
-	const bool repeat_y = fit_mode != REPEAT_X;
+	const bool repeat[2] = {fit_mode != REPEAT_Y, fit_mode != REPEAT_X};
+	Vector2f sprite_min, sprite_max, texel;
+	GetSpriteBounds(tile_data, sprite_min, sprite_max, texel);
+
+	Vector2f uv_start = tile_data.texcoords[0] + oriented_texcoords[orientation][0] * (tile_data.texcoords[1] - tile_data.texcoords[0]);
+	Vector2f uv_end = tile_data.texcoords[0] + oriented_texcoords[orientation][1] * (tile_data.texcoords[1] - tile_data.texcoords[0]);
 	Vector2f offset(0.f);
+	Vector2f step = tile_dimensions;
+	int counts[2] = {1, 1};
 	for (int axis = 0; axis < 2; ++axis)
 	{
-		if ((axis == 0 && repeat_x) || (axis == 1 && repeat_y))
+		if (!repeat[axis])
+		{
+			offset[axis] = TileAlignmentOffset(align[axis], surface_dimensions[axis] - tile_dimensions[axis]);
 			continue;
-		offset[axis] = TileAlignmentOffset(align[axis], surface_dimensions[axis] - tile_dimensions[axis]);
+		}
+		// A sprite spanning its whole texture along this axis repeats the way a whole texture does, by coordinates past
+		// its edge that the sampler wraps: quads clamped at each seam would show the seams.
+		const float tolerance = 0.01f * texel[axis];
+		if (sprite_min[axis] <= tolerance && sprite_max[axis] >= 1.f - tolerance)
+		{
+			step[axis] = surface_dimensions[axis];
+			uv_end[axis] = uv_start[axis] + (uv_end[axis] - uv_start[axis]) * (surface_dimensions[axis] / tile_dimensions[axis]);
+		}
+		else
+		{
+			counts[axis] = int(std::ceil(surface_dimensions[axis] / tile_dimensions[axis]));
+		}
 	}
 	offset = offset.Round();
-	const Vector2f uv_start = tile_data.texcoords[0] + oriented_texcoords[orientation][0] *
-		(tile_data.texcoords[1] - tile_data.texcoords[0]);
-	const Vector2f uv_end = tile_data.texcoords[0] + oriented_texcoords[orientation][1] *
-		(tile_data.texcoords[1] - tile_data.texcoords[0]);
+
 	const ColourbPremultiplied colour = computed.image_color().ToPremultiplied(computed.opacity());
-	const int columns = repeat_x ? int(std::ceil(surface_dimensions.x / tile_dimensions.x)) : 1;
-	const int rows = repeat_y ? int(std::ceil(surface_dimensions.y / tile_dimensions.y)) : 1;
-	mesh.vertices.reserve(mesh.vertices.size() + size_t(columns) * size_t(rows) * 4);
-	mesh.indices.reserve(mesh.indices.size() + size_t(columns) * size_t(rows) * 6);
-	for (int row = 0; row < rows; ++row)
-	for (int column = 0; column < columns; ++column)
-	{
-		const Vector2f origin = offset + Vector2f(column * tile_dimensions.x, row * tile_dimensions.y);
-		const Vector2f clipped_start(std::max(origin.x, 0.f), std::max(origin.y, 0.f));
-		const Vector2f clipped_end(std::min(origin.x + tile_dimensions.x, surface_dimensions.x),
-			std::min(origin.y + tile_dimensions.y, surface_dimensions.y));
-		const Vector2f dimensions = clipped_end - clipped_start;
-		if (dimensions.x <= 0.f || dimensions.y <= 0.f)
-			continue;
-		const Vector2f start_uv = uv_start + (uv_end - uv_start) * ((clipped_start - origin) / tile_dimensions);
-		const Vector2f end_uv = uv_start + (uv_end - uv_start) * ((clipped_end - origin) / tile_dimensions);
-		MeshUtilities::GenerateQuad(mesh, surface_origin + clipped_start, dimensions, colour, start_uv, end_uv);
-	}
-}
-
-// The size of one texel in texture coordinates, per axis; zero where the tile does not say.
-static Vector2f TexelSize(const DecoratorTiled::Tile::TileData& data)
-{
-	Vector2f texel(0.f);
-	for (int axis = 0; axis < 2; ++axis)
-		if (data.size[axis] > 0.f)
-			texel[axis] = Math::Absolute(data.texcoords[1][axis] - data.texcoords[0][axis]) / data.size[axis];
-	return texel;
-}
-
-// Which ends of a quad, per axis (0 its start, 1 its end), are a sprite edge inside its sheet: the next sprite's
-// texels lie right past them, and linear filtering at the quad's outer pixels mixes them in. Ends at the texture
-// border are the renderer's to clamp, and ends the tile was clipped at lie inside the sprite.
-static void FindSheetEdges(const Vector2f texcoords[2], const bool clipped[2][2], Vector2f texel, bool out_inner[2][2])
-{
-	constexpr float epsilon = 1e-4f;
-	for (int axis = 0; axis < 2; ++axis)
-	{
-		for (int end = 0; end < 2; ++end)
+	for (int row = 0; row < counts[1]; ++row)
+		for (int column = 0; column < counts[0]; ++column)
 		{
-			const float uv = texcoords[end][axis];
-			out_inner[axis][end] = texel[axis] > 0.f && !clipped[axis][end] && uv > epsilon && uv < 1.f - epsilon;
+			const Vector2f origin = offset + Vector2f(column * step.x, row * step.y);
+			const Vector2f clipped_start(std::max(origin.x, 0.f), std::max(origin.y, 0.f));
+			const Vector2f clipped_end(std::min(origin.x + step.x, surface_dimensions.x), std::min(origin.y + step.y, surface_dimensions.y));
+			const Vector2f dimensions = clipped_end - clipped_start;
+			if (dimensions.x <= 0.f || dimensions.y <= 0.f)
+				continue;
+			const Vector2f start_uv = uv_start + (uv_end - uv_start) * ((clipped_start - origin) / step);
+			const Vector2f end_uv = uv_start + (uv_end - uv_start) * ((clipped_end - origin) / step);
+			GenerateClampedQuad(mesh, surface_origin + clipped_start, dimensions, colour, start_uv, end_uv, sprite_min, sprite_max, texel);
 		}
-	}
-}
-
-// Draws the tile as up to 3 x 3 quads: along each sprite edge inside its sheet a band half a texel wide that samples
-// the edge texel's centre, and everything else mapped as the single quad would be. Linear filtering then stays
-// inside the sprite at any scale, without moving any of its pixels.
-static void GenerateSheetTileQuad(Mesh& mesh, Vector2f position, Vector2f size, ColourbPremultiplied colour, const Vector2f texcoords[2],
-	Vector2f texel, const bool inner[2][2])
-{
-	struct Span {
-		float start, end, uv_start, uv_end;
-	};
-	Span spans[2][3];
-	int counts[2] = {0, 0};
-	for (int axis = 0; axis < 2; ++axis)
-	{
-		const float start = position[axis];
-		const float end = position[axis] + size[axis];
-		const float uv_start = texcoords[0][axis];
-		const float uv_end = texcoords[1][axis];
-		const float texels = (texel[axis] > 0.f) ? Math::Absolute(uv_end - uv_start) / texel[axis] : 0.f;
-		// Half a texel: in px, and in texture coordinates toward the quad's inside.
-		const float band = (texels > 0.f) ? 0.5f * size[axis] / texels : 0.f;
-		const float half_texel = (uv_end < uv_start ? -0.5f : 0.5f) * texel[axis];
-		const bool fits = band > 0.f && 2.f * band < size[axis];
-		const bool lead = inner[axis][0] && fits;
-		const bool trail = inner[axis][1] && fits;
-		int& n = counts[axis];
-		if (lead)
-			spans[axis][n++] = {start, start + band, uv_start + half_texel, uv_start + half_texel};
-		spans[axis][n++] = {lead ? start + band : start, trail ? end - band : end, lead ? uv_start + half_texel : uv_start,
-			trail ? uv_end - half_texel : uv_end};
-		if (trail)
-			spans[axis][n++] = {end - band, end, uv_end - half_texel, uv_end - half_texel};
-	}
-	for (int y = 0; y < counts[1]; ++y)
-	{
-		for (int x = 0; x < counts[0]; ++x)
-		{
-			const Span& sx = spans[0][x];
-			const Span& sy = spans[1][y];
-			MeshUtilities::GenerateQuad(mesh, Vector2f(sx.start, sy.start), Vector2f(sx.end - sx.start, sy.end - sy.start), colour,
-				Vector2f(sx.uv_start, sy.uv_start), Vector2f(sx.uv_end, sy.uv_end));
-		}
-	}
 }
 
 void DecoratorTiled::Tile::GenerateGeometry(Mesh& mesh, const ComputedValues& computed, const Vector2f surface_origin,
@@ -286,7 +243,6 @@ void DecoratorTiled::Tile::GenerateGeometry(Mesh& mesh, const ComputedValues& co
 	}
 
 	Vector2f tile_offset(0, 0);
-	bool clipped[2][2] = {{false, false}, {false, false}};
 
 	if (offset_and_clip_tile)
 	{
@@ -304,8 +260,6 @@ void DecoratorTiled::Tile::GenerateGeometry(Mesh& mesh, const ComputedValues& co
 			float overshoot_left = std::max(-tile_offset[i], 0.0f);
 			float overshoot_right = std::max(tile_offset[i] + final_tile_dimensions[i] - surface_dimensions[i], 0.0f);
 
-			clipped[i][0] = overshoot_left > 0.f;
-			clipped[i][1] = overshoot_right > 0.f;
 			if (overshoot_left > 0.f || overshoot_right > 0.f)
 			{
 				float& left = scaled_texcoords[0][i];
@@ -328,10 +282,10 @@ void DecoratorTiled::Tile::GenerateGeometry(Mesh& mesh, const ComputedValues& co
 	Vector2f tile_position = (surface_origin + tile_offset);
 	Math::SnapToPixelGrid(tile_position, final_tile_dimensions);
 
-	const Vector2f texel = TexelSize(tile_data);
-	bool inner[2][2];
-	FindSheetEdges(scaled_texcoords, clipped, texel, inner);
-	GenerateSheetTileQuad(mesh, tile_position, final_tile_dimensions, quad_colour, scaled_texcoords, texel, inner);
+	Vector2f sprite_min, sprite_max, texel;
+	GetSpriteBounds(tile_data, sprite_min, sprite_max, texel);
+	GenerateClampedQuad(mesh, tile_position, final_tile_dimensions, quad_colour, scaled_texcoords[0], scaled_texcoords[1], sprite_min, sprite_max,
+		texel);
 }
 
 void DecoratorTiled::ScaleTileDimensions(Vector2f& tile_dimensions, float axis_value, Axis axis_enum) const
