@@ -173,6 +173,9 @@ private:
 		GeometryArena::Allocation vertices;
 		GeometryArena::Allocation indices;
 		int num_indices = 0;
+		// Its texture coordinates leave 0..1 along that axis: it tiles its texture there, and the sampler repeats it.
+		bool tiles_u = false;
+		bool tiles_v = false;
 	};
 
 	enum class ShaderGradientFunction { Linear, Radial, Conic, RepeatingLinear, RepeatingRadial, RepeatingConic };
@@ -449,8 +452,9 @@ private:
 		uint8_t stencil_reference = 0;
 		SDL_GPUTexture* texture = nullptr;
 		SDL_GPUTexture* mask_texture = nullptr;
-		// Null to sample with the renderer's default sampler, which repeats. The postprocess passes clamp instead:
-		// they offset and scale texture coordinates, and a wrapped sample would come back from the far edge.
+		// Null to sample with the renderer's sampler that repeats along both axes. RenderGeometry() repeats only along
+		// the axes its geometry tiles and clamps along the others; the postprocess passes clamp: a repeated sample
+		// would bring colours back from the texture's far edge.
 		SDL_GPUSampler* sampler = nullptr;
 		// Null to use the transform RmlUi last set. The renderer's own target-sized quad is in target coordinates and
 		// passes the plain projection instead. Only read by the programs whose vertex stage takes a transform.
@@ -514,9 +518,13 @@ private:
 	// makes writing to it safe while recorded uploads are still in flight.
 	TransferBuffer texture_transfers;
 
-	// The postprocess passes use the clamping one: they sample outside the image on purpose, and a repeated sample
-	// would come back from the opposite edge.
+	// Geometry repeats its texture only along the axes it tiles (linear_sampler both, repeat_u_sampler across,
+	// repeat_v_sampler down) and clamps along the others: at a quad's outer pixels linear filtering reaches half a
+	// texel past the edge, and a repeated sample comes back from the opposite edge (a dark line along an image whose
+	// own edge is transparent). The postprocess passes clamp; they sample outside the image on purpose.
 	SDL_GPUSampler* linear_sampler = nullptr;
+	SDL_GPUSampler* repeat_u_sampler = nullptr;
+	SDL_GPUSampler* repeat_v_sampler = nullptr;
 	SDL_GPUSampler* clamp_sampler = nullptr;
 
 	SDL_GPUCommandBuffer* command_buffer = nullptr;

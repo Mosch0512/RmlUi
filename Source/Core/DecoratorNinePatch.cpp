@@ -4,6 +4,7 @@
 #include "../../Include/RmlUi/Core/ElementUtilities.h"
 #include "../../Include/RmlUi/Core/Geometry.h"
 #include "../../Include/RmlUi/Core/PropertyDefinition.h"
+#include "TexCoordClamp.h"
 
 namespace Rml {
 
@@ -102,40 +103,21 @@ DecoratorDataHandle DecoratorNinePatch::GenerateElementData(Element* element, Bo
 	surface_pos[1] = surface_pos[1].Round();
 	surface_pos[2] = surface_pos[2].Round();
 
-	/* Now we have all the coordinates we need. Expand the diagonal vertices to the 16 individual vertices. */
+	/* Now we have all the coordinates we need. Expand the diagonal vertices to the grid of nine patches, held inside
+	   the outer rectangle so that the outer patches' edges do not sample the texels around it. */
+	Vector<TexCoordStop> x_stops, y_stops;
+	for (int i = 0; i < 4; i++)
+	{
+		x_stops.push_back({surface_pos[i].x, tex_coords[i].x});
+		y_stops.push_back({surface_pos[i].y, tex_coords[i].y});
+	}
+	const Vector2f texel(texture_dimensions.x > 0.f ? 1.f / texture_dimensions.x : 0.f,
+		texture_dimensions.y > 0.f ? 1.f / texture_dimensions.y : 0.f);
+	ClampTexCoordStops(x_stops, tex_coords[0].x, tex_coords[3].x, texel.x);
+	ClampTexCoordStops(y_stops, tex_coords[0].y, tex_coords[3].y, texel.y);
+
 	Mesh mesh;
-	Vector<Vertex>& vertices = mesh.vertices;
-	Vector<int>& indices = mesh.indices;
-
-	vertices.resize(4 * 4);
-
-	for (int y = 0; y < 4; y++)
-	{
-		for (int x = 0; x < 4; x++)
-		{
-			Vertex& vertex = vertices[y * 4 + x];
-			vertex.colour = quad_colour;
-			vertex.position = {surface_pos[x].x, surface_pos[y].y};
-			vertex.tex_coord = {tex_coords[x].x, tex_coords[y].y};
-		}
-	}
-
-	// Nine rectangles, two triangles per rectangle, three indices per triangle.
-	indices.resize(9 * 2 * 3);
-
-	// Fill in the indices one rectangle at a time.
-	const int top_left_indices[9] = {0, 1, 2, 4, 5, 6, 8, 9, 10};
-	for (int rectangle = 0; rectangle < 9; rectangle++)
-	{
-		int i = rectangle * 6;
-		int top_left_index = top_left_indices[rectangle];
-		indices[i] = top_left_index;
-		indices[i + 1] = top_left_index + 4;
-		indices[i + 2] = top_left_index + 1;
-		indices[i + 3] = top_left_index + 1;
-		indices[i + 4] = top_left_index + 4;
-		indices[i + 5] = top_left_index + 5;
-	}
+	GenerateTexCoordGrid(mesh, x_stops, y_stops, quad_colour);
 
 	Geometry* data = new Geometry(element->GetRenderManager()->MakeGeometry(std::move(mesh)));
 

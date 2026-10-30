@@ -2,11 +2,11 @@
 #include "../../../Include/RmlUi/Core/ComputedValues.h"
 #include "../../../Include/RmlUi/Core/ElementDocument.h"
 #include "../../../Include/RmlUi/Core/ElementUtilities.h"
-#include "../../../Include/RmlUi/Core/MeshUtilities.h"
 #include "../../../Include/RmlUi/Core/PropertyIdSet.h"
 #include "../../../Include/RmlUi/Core/StyleSheet.h"
 #include "../../../Include/RmlUi/Core/Texture.h"
 #include "../../../Include/RmlUi/Core/URL.h"
+#include "../TexCoordClamp.h"
 #include "../TextureDatabase.h"
 
 namespace Rml {
@@ -163,10 +163,10 @@ void ElementImage::GenerateGeometry()
 	Mesh mesh = geometry.Release(Geometry::ReleaseMode::ClearMesh);
 
 	// Generate the texture coordinates.
+	const Vector2f texture_dimensions = Vector2f(Math::Max(texture.GetDimensions(), Vector2i(1)));
 	Vector2f texcoords[2];
 	if (rect_source != RectSource::None)
 	{
-		Vector2f texture_dimensions = Vector2f(Math::Max(texture.GetDimensions(), Vector2i(1)));
 		texcoords[0] = rect.TopLeft() / texture_dimensions;
 		texcoords[1] = rect.BottomRight() / texture_dimensions;
 	}
@@ -180,7 +180,9 @@ void ElementImage::GenerateGeometry()
 	const ColourbPremultiplied quad_colour = computed.image_color().ToPremultiplied(computed.opacity());
 	const RenderBox render_box = GetRenderBox(BoxArea::Content);
 
-	MeshUtilities::GenerateQuad(mesh, render_box.GetFillOffset(), render_box.GetFillSize(), quad_colour, texcoords[0], texcoords[1]);
+	// Held half a texel inside the image or its sprite, so that its edges do not sample the texels past it.
+	GenerateClampedQuad(mesh, render_box.GetFillOffset(), render_box.GetFillSize(), quad_colour, texcoords[0], texcoords[1],
+		Math::Min(texcoords[0], texcoords[1]), Math::Max(texcoords[0], texcoords[1]), Vector2f(1.f) / texture_dimensions);
 
 	if (RenderManager* render_manager = GetRenderManager())
 		geometry = render_manager->MakeGeometry(std::move(mesh));

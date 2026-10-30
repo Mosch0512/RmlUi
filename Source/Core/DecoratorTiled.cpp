@@ -6,6 +6,7 @@
 #include "../../Include/RmlUi/Core/MeshUtilities.h"
 #include "../../Include/RmlUi/Core/PropertyDefinition.h"
 #include "../../Include/RmlUi/Core/Spritesheet.h"
+#include "TexCoordClamp.h"
 #include <algorithm>
 #include <cmath>
 
@@ -87,44 +88,70 @@ static float TileAlignmentOffset(const Style::LengthPercentage alignment, float 
 	return 0.f;
 }
 
+// The sprite's extent in texture coordinates and one texel's size, per axis; the texel is zero where the tile does not
+// say how large the sprite is.
+static void GetSpriteBounds(const DecoratorTiled::Tile::TileData& data, Vector2f& out_min, Vector2f& out_max, Vector2f& out_texel)
+{
+	out_min = Math::Min(data.texcoords[0], data.texcoords[1]);
+	out_max = Math::Max(data.texcoords[0], data.texcoords[1]);
+	out_texel = Vector2f(0.f);
+	for (int axis = 0; axis < 2; ++axis)
+	{
+		if (data.size[axis] > 0.f)
+			out_texel[axis] = (out_max[axis] - out_min[axis]) / data.size[axis];
+	}
+}
+
 void DecoratorTiled::Tile::GenerateRepeatedGeometry(Mesh& mesh, const ComputedValues& computed,
 	const Vector2f surface_origin, const Vector2f surface_dimensions, const Vector2f tile_dimensions) const
 {
 	if (tile_dimensions.x <= 0.f || tile_dimensions.y <= 0.f)
 		return;
-	const bool repeat_x = fit_mode != REPEAT_Y;
-	const bool repeat_y = fit_mode != REPEAT_X;
+	const bool repeat[2] = {fit_mode != REPEAT_Y, fit_mode != REPEAT_X};
+	Vector2f sprite_min, sprite_max, texel;
+	GetSpriteBounds(tile_data, sprite_min, sprite_max, texel);
+
+	Vector2f uv_start = tile_data.texcoords[0] + oriented_texcoords[orientation][0] * (tile_data.texcoords[1] - tile_data.texcoords[0]);
+	Vector2f uv_end = tile_data.texcoords[0] + oriented_texcoords[orientation][1] * (tile_data.texcoords[1] - tile_data.texcoords[0]);
 	Vector2f offset(0.f);
+	Vector2f step = tile_dimensions;
+	int counts[2] = {1, 1};
 	for (int axis = 0; axis < 2; ++axis)
 	{
-		if ((axis == 0 && repeat_x) || (axis == 1 && repeat_y))
+		if (!repeat[axis])
+		{
+			offset[axis] = TileAlignmentOffset(align[axis], surface_dimensions[axis] - tile_dimensions[axis]);
 			continue;
-		offset[axis] = TileAlignmentOffset(align[axis], surface_dimensions[axis] - tile_dimensions[axis]);
+		}
+		// A sprite spanning its whole texture along this axis repeats the way a whole texture does, by coordinates past
+		// its edge that the sampler wraps: quads clamped at each seam would show the seams.
+		const float tolerance = 0.01f * texel[axis];
+		if (sprite_min[axis] <= tolerance && sprite_max[axis] >= 1.f - tolerance)
+		{
+			step[axis] = surface_dimensions[axis];
+			uv_end[axis] = uv_start[axis] + (uv_end[axis] - uv_start[axis]) * (surface_dimensions[axis] / tile_dimensions[axis]);
+		}
+		else
+		{
+			counts[axis] = int(std::ceil(surface_dimensions[axis] / tile_dimensions[axis]));
+		}
 	}
 	offset = offset.Round();
-	const Vector2f uv_start = tile_data.texcoords[0] + oriented_texcoords[orientation][0] *
-		(tile_data.texcoords[1] - tile_data.texcoords[0]);
-	const Vector2f uv_end = tile_data.texcoords[0] + oriented_texcoords[orientation][1] *
-		(tile_data.texcoords[1] - tile_data.texcoords[0]);
+
 	const ColourbPremultiplied colour = computed.image_color().ToPremultiplied(computed.opacity());
-	const int columns = repeat_x ? int(std::ceil(surface_dimensions.x / tile_dimensions.x)) : 1;
-	const int rows = repeat_y ? int(std::ceil(surface_dimensions.y / tile_dimensions.y)) : 1;
-	mesh.vertices.reserve(mesh.vertices.size() + size_t(columns) * size_t(rows) * 4);
-	mesh.indices.reserve(mesh.indices.size() + size_t(columns) * size_t(rows) * 6);
-	for (int row = 0; row < rows; ++row)
-	for (int column = 0; column < columns; ++column)
-	{
-		const Vector2f origin = offset + Vector2f(column * tile_dimensions.x, row * tile_dimensions.y);
-		const Vector2f clipped_start(std::max(origin.x, 0.f), std::max(origin.y, 0.f));
-		const Vector2f clipped_end(std::min(origin.x + tile_dimensions.x, surface_dimensions.x),
-			std::min(origin.y + tile_dimensions.y, surface_dimensions.y));
-		const Vector2f dimensions = clipped_end - clipped_start;
-		if (dimensions.x <= 0.f || dimensions.y <= 0.f)
-			continue;
-		const Vector2f start_uv = uv_start + (uv_end - uv_start) * ((clipped_start - origin) / tile_dimensions);
-		const Vector2f end_uv = uv_start + (uv_end - uv_start) * ((clipped_end - origin) / tile_dimensions);
-		MeshUtilities::GenerateQuad(mesh, surface_origin + clipped_start, dimensions, colour, start_uv, end_uv);
-	}
+	for (int row = 0; row < counts[1]; ++row)
+		for (int column = 0; column < counts[0]; ++column)
+		{
+			const Vector2f origin = offset + Vector2f(column * step.x, row * step.y);
+			const Vector2f clipped_start(std::max(origin.x, 0.f), std::max(origin.y, 0.f));
+			const Vector2f clipped_end(std::min(origin.x + step.x, surface_dimensions.x), std::min(origin.y + step.y, surface_dimensions.y));
+			const Vector2f dimensions = clipped_end - clipped_start;
+			if (dimensions.x <= 0.f || dimensions.y <= 0.f)
+				continue;
+			const Vector2f start_uv = uv_start + (uv_end - uv_start) * ((clipped_start - origin) / step);
+			const Vector2f end_uv = uv_start + (uv_end - uv_start) * ((clipped_end - origin) / step);
+			GenerateClampedQuad(mesh, surface_origin + clipped_start, dimensions, colour, start_uv, end_uv, sprite_min, sprite_max, texel);
+		}
 }
 
 void DecoratorTiled::Tile::GenerateGeometry(Mesh& mesh, const ComputedValues& computed, const Vector2f surface_origin,
@@ -255,7 +282,10 @@ void DecoratorTiled::Tile::GenerateGeometry(Mesh& mesh, const ComputedValues& co
 	Vector2f tile_position = (surface_origin + tile_offset);
 	Math::SnapToPixelGrid(tile_position, final_tile_dimensions);
 
-	MeshUtilities::GenerateQuad(mesh, tile_position, final_tile_dimensions, quad_colour, scaled_texcoords[0], scaled_texcoords[1]);
+	Vector2f sprite_min, sprite_max, texel;
+	GetSpriteBounds(tile_data, sprite_min, sprite_max, texel);
+	GenerateClampedQuad(mesh, tile_position, final_tile_dimensions, quad_colour, scaled_texcoords[0], scaled_texcoords[1], sprite_min, sprite_max,
+		texel);
 }
 
 void DecoratorTiled::ScaleTileDimensions(Vector2f& tile_dimensions, float axis_value, Axis axis_enum) const
