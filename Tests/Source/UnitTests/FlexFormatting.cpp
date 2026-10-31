@@ -315,6 +315,19 @@ static const String document_flex_empty_rml = R"(
 			left: 0;
 			width: 10px;
 		}
+		.hidden {
+			display: none;
+		}
+		.definite {
+			height: 60px;
+		}
+		.row_parent {
+			display: flex;
+			align-items: flex-start;
+		}
+		.grow {
+			flex: 1;
+		}
 	</style>
 </head>
 
@@ -329,6 +342,14 @@ static const String document_flex_empty_rml = R"(
 	</div>
 	<div class="band border_box" id="border_box"/>
 	<div id="after"/>
+	<div class="band column" id="hidden_rows">
+		<div class="hidden"/>
+		<div class="hidden"/>
+	</div>
+	<div class="band definite" id="definite"/>
+	<div class="row_parent">
+		<div class="band grow" id="nested"/>
+	</div>
 </body>
 </rml>
 )";
@@ -356,6 +377,12 @@ TEST_CASE("FlexFormatting.empty_container_min_size")
 		{"column_absolute", 40.f},
 		// With border-box sizing, the min-height includes the 2 * 5px padding.
 		{"border_box", 30.f},
+		// Children with display: none are not flex items either.
+		{"hidden_rows", 40.f},
+		// A definite height is kept.
+		{"definite", 60.f},
+		// As a flex item that is not stretched, the container's height comes from its own layout.
+		{"nested", 40.f},
 	};
 
 	for (const TestCase& test_case : test_cases)
