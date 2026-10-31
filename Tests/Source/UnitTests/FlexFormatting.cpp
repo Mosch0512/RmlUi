@@ -195,6 +195,14 @@ static const String document_flex_absolute_rml = R"(
 			flex-direction: column;
 			min-height: 0;
 		}
+		.floating {
+			position: absolute;
+			top: 0;
+			right: 0;
+		}
+		.floated {
+			float: right;
+		}
 		.short {
 			width: 20px;
 			height: 10px;
@@ -253,6 +261,17 @@ static const String document_flex_absolute_rml = R"(
 		<div class="tall"/>
 		<div class="art" id="column_art"/>
 	</div>
+	<div class="band" id="nested">
+		<div class="short"><div class="art" id="nested_art"/></div>
+	</div>
+	<div class="band floating" id="floating">
+		<div class="tall"/>
+		<div class="art" id="floating_art"/>
+	</div>
+	<div class="band floated" id="floated">
+		<div class="tall"/>
+		<div class="art" id="floated_art"/>
+	</div>
 </body>
 </rml>
 )";
@@ -289,6 +308,11 @@ TEST_CASE("FlexFormatting.absolute_child_of_auto_height_container")
 		{"grown", "grown_centred", 60.f, 20.f, 25.f},
 		// Column direction: two 60px items stacked.
 		{"column", "column_art", 120.f, 130.f, 0.f},
+		// Inside a static flex item: the band is still the containing block.
+		{"nested", "nested_art", 40.f, 50.f, 0.f},
+		// Absolutely positioned and floated flex containers, which get a shrink-to-fit width.
+		{"floating", "floating_art", 60.f, 70.f, 0.f},
+		{"floated", "floated_art", 60.f, 70.f, 0.f},
 	};
 
 	for (const TestCase& test_case : test_cases)
