@@ -203,6 +203,24 @@ static const String document_flex_absolute_rml = R"(
 		.floated {
 			float: right;
 		}
+		scrollbarvertical {
+			width: 10px;
+		}
+		.scroll {
+			flex-direction: column;
+			min-height: 0;
+			width: 100px;
+			overflow: auto;
+		}
+		.scroll .tall {
+			flex-shrink: 0;
+		}
+		.limited {
+			max-height: 50px;
+		}
+		.fixed {
+			height: 50px;
+		}
 		.short {
 			width: 20px;
 			height: 10px;
@@ -272,6 +290,16 @@ static const String document_flex_absolute_rml = R"(
 		<div class="tall"/>
 		<div class="art" id="floated_art"/>
 	</div>
+	<div class="band scroll limited" id="limited">
+		<div class="tall"/>
+		<div class="tall"/>
+		<div class="art" id="limited_art"/>
+	</div>
+	<div class="band scroll fixed" id="fixed">
+		<div class="tall"/>
+		<div class="tall"/>
+		<div class="art" id="fixed_art"/>
+	</div>
 </body>
 </rml>
 )";
@@ -313,6 +341,10 @@ TEST_CASE("FlexFormatting.absolute_child_of_auto_height_container")
 		// Absolutely positioned and floated flex containers, which get a shrink-to-fit width.
 		{"floating", "floating_art", 60.f, 70.f, 0.f},
 		{"floated", "floated_art", 60.f, 70.f, 0.f},
+		// Scroll containers formatted again after enabling a scrollbar: auto height limited by max-height, and a fixed
+		// height whose first Close() fails. The box stored for the child is the one from the accepted pass.
+		{"limited", "limited_art", 50.f, 60.f, 0.f},
+		{"fixed", "fixed_art", 50.f, 60.f, 0.f},
 	};
 
 	for (const TestCase& test_case : test_cases)
@@ -330,6 +362,16 @@ TEST_CASE("FlexFormatting.absolute_child_of_auto_height_container")
 		CHECK(container->GetBox().GetSize().y == doctest::Approx(test_case.container_height));
 		CHECK(child->GetBox().GetSize().y == doctest::Approx(test_case.child_height));
 		CHECK(child->GetRelativeOffset().y == doctest::Approx(test_case.child_offset));
+	}
+
+	// The scroll containers did enable their vertical scrollbar, so they went through the second formatting pass.
+	for (const String id : {"limited", "fixed"})
+	{
+		CAPTURE(id);
+		Element* scroll_container = document->GetElementById(id);
+		CHECK(scroll_container);
+		if (scroll_container)
+			CHECK(scroll_container->GetClientWidth() == doctest::Approx(90.f));
 	}
 
 	document->Close();
