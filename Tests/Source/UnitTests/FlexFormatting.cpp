@@ -388,3 +388,57 @@ TEST_CASE("FlexFormatting.empty_container_min_size")
 
 	TestsShell::ShutdownShell();
 }
+
+static const String document_flex_empty_inline_rml = R"(
+<rml>
+<head>
+	<link type="text/rcss" href="/assets/rml.rcss"/>
+	<style>
+		body {
+			width: 500px;
+			height: 500px;
+			font-family: LatoLatin;
+			font-size: 16px;
+		}
+		.atomic {
+			width: 20px;
+			min-height: 40px;
+			padding: 3px;
+			margin: 2px;
+		}
+	</style>
+</head>
+
+<body>
+	<p>Text <div class="atomic" id="inline_flex" style="display: inline-flex"/> <div class="atomic" id="inline_block" style="display: inline-block"/> text</p>
+</body>
+</rml>
+)";
+
+TEST_CASE("FlexFormatting.empty_inline_flex_baseline")
+{
+	// An inline-flex container without flex items has no baseline. Like an inline-block without line boxes, it sits on
+	// the line's baseline with its bottom margin edge, instead of hanging below it.
+	Context* context = TestsShell::GetContext();
+	REQUIRE(context);
+
+	ElementDocument* document = context->LoadDocumentFromMemory(document_flex_empty_inline_rml);
+	REQUIRE(document);
+	document->Show();
+
+	TestsShell::RenderLoop();
+
+	Element* inline_flex = document->GetElementById("inline_flex");
+	Element* inline_block = document->GetElementById("inline_block");
+	REQUIRE(inline_flex);
+	REQUIRE(inline_block);
+
+	CHECK(inline_flex->GetBox().GetSize().y == doctest::Approx(40.f));
+	CHECK(inline_flex->GetBaseline() == doctest::Approx(0.f));
+	CHECK(inline_flex->GetBaseline() == doctest::Approx(inline_block->GetBaseline()));
+	CHECK(inline_flex->GetAbsoluteTop() == doctest::Approx(inline_block->GetAbsoluteTop()));
+
+	document->Close();
+
+	TestsShell::ShutdownShell();
+}

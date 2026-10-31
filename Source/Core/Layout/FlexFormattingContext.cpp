@@ -65,7 +65,7 @@ UniquePtr<LayoutBox> FlexFormattingContext::Format(ContainerBox* parent_containe
 		// Format the flexbox and all its children.
 		Vector2f flex_resulting_content_size, visible_overflow_size, scrollable_content_size;
 		float flex_baseline = 0.f;
-		context.Format(flex_resulting_content_size, visible_overflow_size, scrollable_content_size, flex_baseline);
+		const bool has_flex_items = context.Format(flex_resulting_content_size, visible_overflow_size, scrollable_content_size, flex_baseline);
 
 		// Catch overflow before our height becomes fixed. This way the enabled scrollbar can extend the height of the flex container, instead of
 		// eating into the content size, which could otherwise result in an unnecessary scrollbar on the opposite axis.
@@ -81,8 +81,10 @@ UniquePtr<LayoutBox> FlexFormattingContext::Format(ContainerBox* parent_containe
 		sized_box.SetContent(formatted_content_size);
 
 		// Change the flex baseline coordinates to the element baseline, which is defined as the distance from the element's bottom margin edge.
-		const float element_baseline =
-			sized_box.GetSizeAcross(BoxDirection::Vertical, BoxArea::Border) + sized_box.GetEdge(BoxArea::Margin, BoxEdge::Bottom) - flex_baseline;
+		// Without flex items there is no baseline, so use the bottom margin edge, as for an inline-block without line boxes.
+		const float element_baseline = has_flex_items
+			? sized_box.GetSizeAcross(BoxDirection::Vertical, BoxArea::Border) + sized_box.GetEdge(BoxArea::Margin, BoxEdge::Bottom) - flex_baseline
+			: 0.f;
 
 		// Close the box, and break out of the loop if it did not produce any new scrollbars, otherwise continue to format the flexbox again.
 		if (flex_container_box->Close(visible_overflow_size, scrollable_content_size, sized_box, element_baseline))
@@ -213,7 +215,7 @@ static float GetInnerUsedCrossSize(const FlexItem& item)
 	return Math::Max(item.used_cross_size - item.cross.sum_edges, 0.f);
 }
 
-void FlexFormattingContext::Format(Vector2f& flex_resulting_content_size, Vector2f& flex_visible_overflow_size,
+bool FlexFormattingContext::Format(Vector2f& flex_resulting_content_size, Vector2f& flex_visible_overflow_size,
 	Vector2f& flex_scrollable_content_size, float& flex_baseline) const
 {
 	// The following procedure is based on the CSS flexible box layout algorithm.
@@ -362,7 +364,7 @@ void FlexFormattingContext::Format(Vector2f& flex_resulting_content_size, Vector
 		const float used_main_size = Math::Clamp(Math::Max(main_available_size, 0.f), main_min_size, main_max_size);
 		const float used_cross_size = Math::Clamp(Math::Max(cross_available_size, 0.f), cross_min_size, cross_max_size);
 		flex_resulting_content_size = main_axis_horizontal ? Vector2f(used_main_size, used_cross_size) : Vector2f(used_cross_size, used_main_size);
-		return;
+		return false;
 	}
 
 	// -- Collect the items into lines --
@@ -983,6 +985,7 @@ void FlexFormattingContext::Format(Vector2f& flex_resulting_content_size, Vector
 	}
 
 	flex_resulting_content_size = MainCrossToVec2(used_main_size, used_cross_size);
+	return true;
 }
 
 } // namespace Rml
