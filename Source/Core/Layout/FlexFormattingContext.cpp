@@ -357,13 +357,17 @@ bool FlexFormattingContext::Format(Vector2f& flex_resulting_content_size, Vector
 		items.push_back(std::move(item));
 	}
 
+	auto MainCrossToVec2 = [main_axis_horizontal](const float v_main, const float v_cross) {
+		return main_axis_horizontal ? Vector2f(v_main, v_cross) : Vector2f(v_cross, v_main);
+	};
+
 	if (items.empty())
 	{
 		// Without flex items there are no lines, but the container's min/max sizes still apply, e.g. for an auto-height
 		// container with only absolutely positioned children. There is no overflow and no baseline.
 		const float used_main_size = Math::Clamp(Math::Max(main_available_size, 0.f), main_min_size, main_max_size);
 		const float used_cross_size = Math::Clamp(Math::Max(cross_available_size, 0.f), cross_min_size, cross_max_size);
-		flex_resulting_content_size = main_axis_horizontal ? Vector2f(used_main_size, used_cross_size) : Vector2f(used_cross_size, used_main_size);
+		flex_resulting_content_size = MainCrossToVec2(used_main_size, used_cross_size);
 		return false;
 	}
 
@@ -942,10 +946,6 @@ bool FlexFormattingContext::Format(Vector2f& flex_resulting_content_size, Vector
 			cursor += line.cross_spacing_a + line.cross_size + line.cross_spacing_b;
 		}
 	}
-
-	auto MainCrossToVec2 = [main_axis_horizontal](const float v_main, const float v_cross) {
-		return main_axis_horizontal ? Vector2f(v_main, v_cross) : Vector2f(v_cross, v_main);
-	};
 
 	bool baseline_set = false;
 
