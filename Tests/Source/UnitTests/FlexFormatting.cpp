@@ -365,7 +365,8 @@ TEST_CASE("FlexFormatting.empty_container_min_size")
 		Element* container = document->GetElementById(test_case.container_id);
 		REQUIRE(container);
 
-		CHECK(container->GetBox().GetSize() == Vector2f(500.f, test_case.content_height));
+		CHECK(container->GetBox().GetSize().x == doctest::Approx(500.f));
+		CHECK(container->GetBox().GetSize().y == doctest::Approx(test_case.content_height));
 	}
 
 	// Absolutely positioned children span the padding box of the container.
