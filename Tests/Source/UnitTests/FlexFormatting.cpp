@@ -274,8 +274,11 @@ TEST_CASE("FlexFormatting.absolute_child_of_auto_height_container")
 
 		Element* container = document->GetElementById(test_case.container_id);
 		Element* child = document->GetElementById(test_case.child_id);
-		REQUIRE(container);
-		REQUIRE(child);
+		// CHECK rather than REQUIRE, so that a missing element still lets the test close its document.
+		CHECK(container);
+		CHECK(child);
+		if (!container || !child)
+			continue;
 
 		CHECK(container->GetBox().GetSize().y == doctest::Approx(test_case.container_height));
 		CHECK(child->GetBox().GetSize().y == doctest::Approx(test_case.child_height));
