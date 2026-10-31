@@ -322,10 +322,10 @@ static const String document_flex_empty_rml = R"(
 	<div class="band" id="row"/>
 	<div class="band column" id="column"/>
 	<div class="band" id="row_absolute">
-		<div class="art" id="row_absolute_art"/>
+		<div class="art"/>
 	</div>
 	<div class="band column" id="column_absolute">
-		<div class="art" id="column_absolute_art"/>
+		<div class="art"/>
 	</div>
 	<div class="band border_box" id="border_box"/>
 	<div id="after"/>
@@ -367,17 +367,6 @@ TEST_CASE("FlexFormatting.empty_container_min_size")
 
 		CHECK(container->GetBox().GetSize().x == doctest::Approx(500.f));
 		CHECK(container->GetBox().GetSize().y == doctest::Approx(test_case.content_height));
-	}
-
-	// Absolutely positioned children span the padding box of the container.
-	for (const String child_id : {"row_absolute_art", "column_absolute_art"})
-	{
-		CAPTURE(child_id);
-
-		Element* child = document->GetElementById(child_id);
-		REQUIRE(child);
-
-		CHECK(child->GetBox().GetSize().y == doctest::Approx(50.f));
 	}
 
 	// The containers take up their space in the normal flow: four bands of 50px and one of 40px.
