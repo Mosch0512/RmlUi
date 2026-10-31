@@ -175,3 +175,114 @@ TEST_CASE("FlexFormatting.dp_ratio")
 
 	TestsShell::ShutdownShell();
 }
+
+static const String document_flex_absolute_rml = R"(
+<rml>
+<head>
+	<link type="text/rcss" href="/assets/rml.rcss"/>
+	<style>
+		body {
+			width: 500px;
+			height: 500px;
+		}
+		.band {
+			display: flex;
+			position: relative;
+			min-height: 40px;
+			padding: 5px 0;
+		}
+		.column {
+			flex-direction: column;
+			min-height: 0;
+		}
+		.short {
+			width: 20px;
+			height: 10px;
+		}
+		.tall {
+			width: 20px;
+			height: 60px;
+		}
+		.art {
+			position: absolute;
+			top: 0;
+			bottom: 0;
+			left: 0;
+			width: 10px;
+		}
+		.half {
+			position: absolute;
+			top: 0;
+			left: 0;
+			width: 10px;
+			height: 50%;
+		}
+	</style>
+</head>
+
+<body>
+	<div class="band" id="min_height">
+		<div class="short"/>
+		<div class="art" id="min_height_art"/>
+	</div>
+	<div class="band" id="grown">
+		<div class="tall"/>
+		<div class="art" id="grown_art"/>
+		<div class="half" id="grown_half"/>
+	</div>
+	<div class="band column" id="column">
+		<div class="tall"/>
+		<div class="tall"/>
+		<div class="art" id="column_art"/>
+	</div>
+</body>
+</rml>
+)";
+
+TEST_CASE("FlexFormatting.absolute_child_of_auto_height_container")
+{
+	// Absolutely positioned children of an auto-height flex container must be sized against the container's final
+	// height, not the indefinite height it had before its flex items were laid out.
+	Context* context = TestsShell::GetContext();
+	REQUIRE(context);
+
+	ElementDocument* document = context->LoadDocumentFromMemory(document_flex_absolute_rml);
+	REQUIRE(document);
+	document->Show();
+
+	TestsShell::RenderLoop();
+
+	struct TestCase {
+		String container_id;
+		String child_id;
+		float container_height;
+		float child_height;
+	};
+	const TestCase test_cases[] = {
+		// A 10px flex item leaves the band at its min-height: 40 + 2 * 5 padding.
+		{"min_height", "min_height_art", 40.f, 50.f},
+		// A 60px flex item grows the band past its min-height.
+		{"grown", "grown_art", 60.f, 70.f},
+		{"grown", "grown_half", 60.f, 35.f},
+		// Column direction: two 60px items stacked.
+		{"column", "column_art", 120.f, 130.f},
+	};
+
+	for (const TestCase& test_case : test_cases)
+	{
+		CAPTURE(test_case.child_id);
+
+		Element* container = document->GetElementById(test_case.container_id);
+		Element* child = document->GetElementById(test_case.child_id);
+		REQUIRE(container);
+		REQUIRE(child);
+
+		CHECK(container->GetBox().GetSize().y == doctest::Approx(test_case.container_height));
+		CHECK(child->GetBox().GetSize().y == doctest::Approx(test_case.child_height));
+		CHECK(child->GetRelativeOffset().y == doctest::Approx(0.f));
+	}
+
+	document->Close();
+
+	TestsShell::ShutdownShell();
+}

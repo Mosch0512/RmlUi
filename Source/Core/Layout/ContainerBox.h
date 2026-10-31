@@ -104,9 +104,10 @@ class FlexContainer final : public ContainerBox {
 public:
 	FlexContainer(Element* element, ContainerBox* parent_container);
 
-	// Submits the formatted box to the flex container element, and propagates any uncaught overflow to this box.
+	// Submits the formatted box to the flex container element, and propagates any uncaught overflow to this box. On
+	// success, the sized box replaces this container's box, so that positioned elements see the final size.
 	// @returns True if it succeeds, otherwise false if it needs to be formatted again because scrollbars were enabled.
-	bool Close(const Vector2f visible_overflow_size, Vector2f scrollable_content_size, const Box& box, float element_baseline);
+	bool Close(const Vector2f visible_overflow_size, Vector2f scrollable_content_size, const Box& sized_box, float element_baseline);
 
 	float GetShrinkToFitWidth() const override;
 
