@@ -357,6 +357,11 @@ void FlexFormattingContext::Format(Vector2f& flex_resulting_content_size, Vector
 
 	if (items.empty())
 	{
+		// Without flex items there are no lines, but the container's min/max sizes still apply, e.g. for an auto-height
+		// container with only absolutely positioned children. There is no overflow and no baseline.
+		const float used_main_size = Math::Clamp(Math::Max(main_available_size, 0.f), main_min_size, main_max_size);
+		const float used_cross_size = Math::Clamp(Math::Max(cross_available_size, 0.f), cross_min_size, cross_max_size);
+		flex_resulting_content_size = main_axis_horizontal ? Vector2f(used_main_size, used_cross_size) : Vector2f(used_cross_size, used_main_size);
 		return;
 	}
 

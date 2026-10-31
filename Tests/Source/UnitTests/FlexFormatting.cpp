@@ -286,3 +286,105 @@ TEST_CASE("FlexFormatting.absolute_child_of_auto_height_container")
 
 	TestsShell::ShutdownShell();
 }
+
+static const String document_flex_empty_rml = R"(
+<rml>
+<head>
+	<link type="text/rcss" href="/assets/rml.rcss"/>
+	<style>
+		body {
+			width: 500px;
+			height: 500px;
+		}
+		.band {
+			display: flex;
+			position: relative;
+			min-height: 40px;
+			padding: 5px 0;
+		}
+		.column {
+			flex-direction: column;
+		}
+		.border_box {
+			box-sizing: border-box;
+		}
+		.art {
+			position: absolute;
+			top: 0;
+			bottom: 0;
+			left: 0;
+			width: 10px;
+		}
+	</style>
+</head>
+
+<body>
+	<div class="band" id="row"/>
+	<div class="band column" id="column"/>
+	<div class="band" id="row_absolute">
+		<div class="art" id="row_absolute_art"/>
+	</div>
+	<div class="band column" id="column_absolute">
+		<div class="art" id="column_absolute_art"/>
+	</div>
+	<div class="band border_box" id="border_box"/>
+	<div id="after"/>
+</body>
+</rml>
+)";
+
+TEST_CASE("FlexFormatting.empty_container_min_size")
+{
+	// A flex container without in-flow flex items still takes its min-height when its height is auto.
+	Context* context = TestsShell::GetContext();
+	REQUIRE(context);
+
+	ElementDocument* document = context->LoadDocumentFromMemory(document_flex_empty_rml);
+	REQUIRE(document);
+	document->Show();
+
+	TestsShell::RenderLoop();
+
+	struct TestCase {
+		String container_id;
+		float content_height;
+	};
+	const TestCase test_cases[] = {
+		{"row", 40.f},
+		{"column", 40.f},
+		{"row_absolute", 40.f},
+		{"column_absolute", 40.f},
+		// With border-box sizing, the min-height includes the 2 * 5px padding.
+		{"border_box", 30.f},
+	};
+
+	for (const TestCase& test_case : test_cases)
+	{
+		CAPTURE(test_case.container_id);
+
+		Element* container = document->GetElementById(test_case.container_id);
+		REQUIRE(container);
+
+		CHECK(container->GetBox().GetSize() == Vector2f(500.f, test_case.content_height));
+	}
+
+	// Absolutely positioned children span the padding box of the container.
+	for (const String child_id : {"row_absolute_art", "column_absolute_art"})
+	{
+		CAPTURE(child_id);
+
+		Element* child = document->GetElementById(child_id);
+		REQUIRE(child);
+
+		CHECK(child->GetBox().GetSize().y == doctest::Approx(50.f));
+	}
+
+	// The containers take up their space in the normal flow: four bands of 50px and one of 40px.
+	Element* after = document->GetElementById("after");
+	REQUIRE(after);
+	CHECK(after->GetAbsoluteTop() == doctest::Approx(240.f));
+
+	document->Close();
+
+	TestsShell::ShutdownShell();
+}
