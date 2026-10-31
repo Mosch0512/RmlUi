@@ -101,8 +101,8 @@ void ContainerBox::SubmitElementLayout()
 	element->OnLayout();
 }
 
-ContainerBox::ContainerBox(Type type, Element* element, ContainerBox* parent_container) :
-	LayoutBox(type), element(element), parent_container(parent_container)
+ContainerBox::ContainerBox(Type type, Element* element, ContainerBox* parent_container, const Box& box) :
+	LayoutBox(type), element(element), box(box), parent_container(parent_container)
 {
 	if (element)
 	{
@@ -235,6 +235,10 @@ bool ContainerBox::SubmitBox(const Vector2f visible_overflow_size, const Vector2
 
 	SetVisibleOverflowSize(propagate_visible_overflow_size);
 
+	// Store the final box, only now that it is accepted. Positioned elements are closed against it, and the box built
+	// before formatting can still have an indefinite height.
+	this->box = box;
+
 	return true;
 }
 
@@ -248,14 +252,10 @@ FlexContainer::FlexContainer(Element* element, ContainerBox* parent_container) :
 	RMLUI_ASSERT(element);
 }
 
-bool FlexContainer::Close(const Vector2f visible_overflow_size, const Vector2f scrollable_content_size, const Box& sized_box, float element_baseline)
+bool FlexContainer::Close(const Vector2f visible_overflow_size, const Vector2f scrollable_content_size, const Box& box, float element_baseline)
 {
-	if (!SubmitBox(visible_overflow_size, scrollable_content_size, sized_box, -1.f))
+	if (!SubmitBox(visible_overflow_size, scrollable_content_size, box, -1.f))
 		return false;
-
-	// Store the final size before closing positioned elements. Absolutely positioned elements use this box as their
-	// containing block, and with an auto height it would otherwise still have the indefinite height from before layout.
-	box = sized_box;
 
 	ClosePositionedElements();
 
