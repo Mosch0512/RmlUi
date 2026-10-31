@@ -217,6 +217,22 @@ static const String document_flex_absolute_rml = R"(
 			width: 10px;
 			height: 50%;
 		}
+		.bottom_half {
+			position: absolute;
+			bottom: 0;
+			left: 0;
+			width: 10px;
+			height: 50%;
+		}
+		.centred {
+			position: absolute;
+			top: 0;
+			bottom: 0;
+			left: 0;
+			width: 10px;
+			height: 20px;
+			margin: auto 0;
+		}
 	</style>
 </head>
 
@@ -229,6 +245,8 @@ static const String document_flex_absolute_rml = R"(
 		<div class="tall"/>
 		<div class="art" id="grown_art"/>
 		<div class="half" id="grown_half"/>
+		<div class="bottom_half" id="grown_bottom_half"/>
+		<div class="centred" id="grown_centred"/>
 	</div>
 	<div class="band column" id="column">
 		<div class="tall"/>
@@ -257,15 +275,20 @@ TEST_CASE("FlexFormatting.absolute_child_of_auto_height_container")
 		String child_id;
 		float container_height;
 		float child_height;
+		float child_offset; // Top of the child's border box, relative to the container's border box.
 	};
 	const TestCase test_cases[] = {
 		// A 10px flex item leaves the band at its min-height: 40 + 2 * 5 padding.
-		{"min_height", "min_height_art", 40.f, 50.f},
+		{"min_height", "min_height_art", 40.f, 50.f, 0.f},
 		// A 60px flex item grows the band past its min-height.
-		{"grown", "grown_art", 60.f, 70.f},
-		{"grown", "grown_half", 60.f, 35.f},
+		{"grown", "grown_art", 60.f, 70.f, 0.f},
+		{"grown", "grown_half", 60.f, 35.f, 0.f},
+		// Placed from the bottom, so the position depends on the size: 70 - 35.
+		{"grown", "grown_bottom_half", 60.f, 35.f, 35.f},
+		// Auto margins centre a 20px child between top: 0 and bottom: 0: (70 - 20) / 2.
+		{"grown", "grown_centred", 60.f, 20.f, 25.f},
 		// Column direction: two 60px items stacked.
-		{"column", "column_art", 120.f, 130.f},
+		{"column", "column_art", 120.f, 130.f, 0.f},
 	};
 
 	for (const TestCase& test_case : test_cases)
@@ -282,7 +305,7 @@ TEST_CASE("FlexFormatting.absolute_child_of_auto_height_container")
 
 		CHECK(container->GetBox().GetSize().y == doctest::Approx(test_case.container_height));
 		CHECK(child->GetBox().GetSize().y == doctest::Approx(test_case.child_height));
-		CHECK(child->GetRelativeOffset().y == doctest::Approx(0.f));
+		CHECK(child->GetRelativeOffset().y == doctest::Approx(test_case.child_offset));
 	}
 
 	document->Close();
